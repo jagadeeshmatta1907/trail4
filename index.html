@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SHOW! - Card Passing & Reaction Game</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600;700&family=Outfit:wght@400;600;800;900&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
+    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+</head>
+<body>
+    <canvas id="confetti-canvas"></canvas>
+
+    <!-- App Header / Global Controls -->
+    <header class="app-header">
+        <div class="logo-group">
+            <span class="logo-icon">🃏</span>
+            <span class="logo-text">SHOW!</span>
+        </div>
+        <div class="header-actions">
+            <button id="btn-sound-toggle" class="icon-btn" title="Toggle Sound">🔊</button>
+            <button class="icon-btn btn-open-rules" title="Game Rules">❓ Rules</button>
+        </div>
+    </header>
+
+    <!-- ================= 1. HOME SCREEN ================= -->
+    <main id="screen-home" class="screen active-screen">
+        <div class="hero-banner">
+            <div class="cards-fan-preview">
+                <span class="fan-card fan-1">👑</span>
+                <span class="fan-card fan-2">👸</span>
+                <span class="fan-card fan-3">🃏</span>
+                <span class="fan-card fan-4">🌟</span>
+            </div>
+            <h1 class="game-title">SHOW!</h1>
+            <p class="game-subtitle">The 3 to 8 Player Card Passing & High-Speed Reaction Party Game</p>
+        </div>
+
+        <div class="quick-settings-strip">
+            <div class="sp-option-pill">
+                <span>Single Player Size:</span>
+                <select id="select-sp-players">
+                    <option value="3">3 Players (12 Cards)</option>
+                    <option value="4" selected>4 Players (16 Cards)</option>
+                    <option value="5">5 Players (20 Cards)</option>
+                    <option value="6">6 Players (24 Cards)</option>
+                    <option value="7">7 Players (28 Cards)</option>
+                    <option value="8">8 Players (32 Cards)</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="menu-grid">
+            <button id="btn-single-player" class="menu-card primary-action">
+                <div class="card-icon">🤖</div>
+                <div class="card-content">
+                    <h3>Single Player (Vs AI)</h3>
+                    <p>Play instant tournament against smart bots with relaxed timing</p>
+                </div>
+                <span class="card-arrow">→</span>
+            </button>
+
+            <button id="btn-create-multiplayer" class="menu-card secondary-action">
+                <div class="card-icon">👑</div>
+                <div class="card-content">
+                    <h3>Create Room (Host)</h3>
+                    <p>Choose 3–8 players, custom rounds, scoring points & invite friends</p>
+                </div>
+                <span class="card-arrow">→</span>
+            </button>
+
+            <button id="btn-join-multiplayer" class="menu-card tertiary-action">
+                <div class="card-icon">👥</div>
+                <div class="card-content">
+                    <h3>Join Room</h3>
+                    <p>Enter a friend's 5-letter Room Code</p>
+                </div>
+                <span class="card-arrow">→</span>
+            </button>
+
+            <button class="menu-card info-action btn-open-rules">
+                <div class="card-icon">📖</div>
+                <div class="card-content">
+                    <h3>How to Play</h3>
+                    <p>Learn card passing rules, deck scaling & "SHOW" panic rush</p>
+                </div>
+                <span class="card-arrow">→</span>
+            </button>
+        </div>
+    </main>
+
+    <!-- ================= 2. CREATE ROOM (HOST) SCREEN ================= -->
+    <main id="screen-create-room" class="screen" style="display: none;">
+        <div class="panel-box">
+            <div class="panel-header">
+                <h2>👑 Host Game Settings</h2>
+                <p>Customize players, cards, rounds, points, and invite friends</p>
+            </div>
+
+            <div class="form-section">
+                <h3>1. Your Identity</h3>
+                <div class="input-group">
+                    <label>Your Name</label>
+                    <input type="text" id="input-host-name" value="Host Player" maxlength="15">
+                </div>
+                <div class="input-group">
+                    <label>Choose Avatar</label>
+                    <div id="host-avatar-picker" class="avatar-picker-grid"></div>
+                </div>
+            </div>
+
+            <div class="form-section">
+                <h3>2. Players & Cards Scaling</h3>
+                <div class="grid-2col">
+                    <div class="input-group">
+                        <label>Total Players (3 to 8)</label>
+                        <input type="number" id="input-player-count" value="4" min="3" max="8">
+                        <span id="total-cards-label" class="sub-hint">16 Cards (4 sets of 4)</span>
+                    </div>
+                    <div class="input-group">
+                        <label>Number of Rounds (e.g. 3, 5, 7, 10)</label>
+                        <input type="number" id="input-rounds" value="5" min="1" max="20">
+                    </div>
+                </div>
+                <div class="input-group" style="margin-top: 10px;">
+                    <label>Card Set Theme</label>
+                    <select id="select-theme">
+                        <option value="royal" selected>👑 Royal Court (King, Queen, Jack, Ace, Knight...)</option>
+                        <option value="safari">🦁 Wild Safari (Lion, Panda, Fox, Eagle, Tiger...)</option>
+                        <option value="fruits">🍎 Juicy Fruits (Apple, Banana, Grape, Berry, Melon...)</option>
+                        <option value="heroes">⚡ Superheroes (Thunder, Flame, Shadow, Cosmic, Frost...)</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="form-section">
+                <h3>3. Custom Host Points (Scoring per Round)</h3>
+                <div class="presets-row">
+                    <span class="preset-label">Presets:</span>
+                    <button class="preset-btn active" data-preset="classic">Classic (1000/750/500/250...)</button>
+                    <button class="preset-btn" data-preset="simple">Simple (100/75/50/25...)</button>
+                    <button class="preset-btn" data-preset="highstakes">High Stakes (1000/400/150/0...)</button>
+                </div>
+
+                <div id="points-inputs-grid" class="points-grid">
+                    <!-- Injected dynamically based on player count -->
+                </div>
+            </div>
+
+            <div class="panel-buttons">
+                <button class="btn btn-secondary btn-back-home">← Back</button>
+                <button id="btn-confirm-create-room" class="btn btn-primary">Create Room & Open Lobby →</button>
+            </div>
+        </div>
+    </main>
+
+    <!-- ================= 3. JOIN ROOM SCREEN ================= -->
+    <main id="screen-join-room" class="screen" style="display: none;">
+        <div class="panel-box">
+            <div class="panel-header">
+                <h2>👥 Join a Game Room</h2>
+                <p>Enter the Room Code shared by the host</p>
+            </div>
+
+            <div class="form-section">
+                <div class="input-group">
+                    <label>5-Letter Room Code</label>
+                    <input type="text" id="input-join-code" placeholder="e.g. SHOW5" maxlength="8" style="text-transform: uppercase; font-size: 1.4rem; letter-spacing: 3px; font-weight: bold; text-align: center;">
+                </div>
+                <div class="input-group">
+                    <label>Your Name</label>
+                    <input type="text" id="input-join-name" value="Player" maxlength="15">
+                </div>
+                <div class="input-group">
+                    <label>Choose Avatar</label>
+                    <div id="join-avatar-picker" class="avatar-picker-grid"></div>
+                </div>
+            </div>
+
+            <div class="panel-buttons">
+                <button class="btn btn-secondary btn-back-home">← Back</button>
+                <button id="btn-confirm-join-room" class="btn btn-primary">Join Lobby →</button>
+            </div>
+        </div>
+    </main>
+
+    <!-- ================= 4. MULTIPLAYER LOBBY SCREEN ================= -->
+    <main id="screen-lobby" class="screen" style="display: none;">
+        <div class="panel-box lobby-box">
+            <div class="lobby-header">
+                <div class="room-code-tag">
+                    <span>ROOM CODE:</span>
+                    <strong id="lobby-room-code">-----</strong>
+                </div>
+                <div class="lobby-share-actions">
+                    <button id="btn-copy-code" class="btn btn-sm btn-outline">📋 Copy Code</button>
+                    <button id="btn-copy-link" class="btn btn-sm btn-outline">🔗 Copy Invite Link</button>
+                </div>
+            </div>
+
+            <div id="lobby-rules-summary" class="lobby-summary-pill">
+                4 Players (16 Cards) • 5 Rounds • 1st: 1000pts • Royal Court
+            </div>
+
+            <div class="lobby-players-title">Players in Room:</div>
+            <div id="lobby-player-slots" class="lobby-slots-grid">
+                <!-- Player slots injected via JS -->
+            </div>
+
+            <div class="lobby-footer">
+                <p id="lobby-waiting-notice" class="lobby-hint">Any unfilled seats will be automatically filled by AI Bots when the match starts!</p>
+                <div class="panel-buttons">
+                    <button class="btn btn-secondary btn-back-home">Exit Lobby</button>
+                    <button id="btn-lobby-start-game" class="btn btn-primary btn-glow">🚀 Start Game Now!</button>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- ================= 5. GAME ARENA / TABLE SCREEN ================= -->
+    <main id="screen-game-table" class="screen" style="display: none;">
+        <!-- Top Status Bar -->
+        <div class="game-top-bar">
+            <div class="round-badge" id="table-round-indicator">Round 1 of 5</div>
+            <div class="theme-badge" id="table-theme-badge">👑 Royal Court • 16 Cards</div>
+            <button class="btn btn-sm btn-outline btn-back-home">Exit</button>
+        </div>
+
+        <!-- Felt Card Table Area -->
+        <div class="card-table-felt">
+            <!-- Dynamic Opponents Ring around the table -->
+            <div id="dynamic-opponents-ring" class="opponents-ring-grid">
+                <!-- Dynamic opponent cards injected here -->
+            </div>
+
+            <!-- Center Table Pass & Flight Zone -->
+            <div id="pass-animation-zone" class="center-table-zone">
+                <div class="pass-circle-indicator">
+                    <span class="pass-arrow-cw">↻</span>
+                    <span class="pass-label">PASSING CLOCKWISE</span>
+                </div>
+                <div class="flight-card" id="flight-card-element">🂠</div>
+            </div>
+
+            <!-- South / You -->
+            <div class="player-bottom-area">
+                <!-- Turn Banner: who is passing right now -->
+                <div id="turn-banner" class="turn-banner other-turn">⏳ Waiting for game to start...</div>
+
+                <!-- Match Progress Bar -->
+                <div id="hand-progress-badge" class="hand-progress-badge">
+                    <div class="progress-label"><span>Matching: <strong>0/4 (0%)</strong></span></div>
+                    <div class="progress-bar-bg"><div class="progress-bar-fill" style="width: 0%;"></div></div>
+                </div>
+
+                <!-- Your 4 Cards -->
+                <div id="player-hand" class="player-cards-hand">
+                    <!-- 4 interactive cards rendered dynamically -->
+                </div>
+
+                <!-- Bottom Action Controls -->
+                <div class="player-actions-bar">
+                    <button id="btn-pass-card" class="btn btn-action" disabled>
+                        <span>📤 Pass Selected Card</span>
+                    </button>
+                    <button id="btn-game-submit" class="btn btn-submit-normal" disabled>
+                        SUBMIT (Matches 4/4)
+                    </button>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- ================= 6. EMERGENCY "SHOW!" PANIC OVERLAY ================= -->
+    <div id="show-panic-overlay" class="panic-overlay">
+        <div class="panic-content">
+            <div class="siren-light">🚨</div>
+            <h1 class="panic-title">SHOW!</h1>
+            <p id="panic-caller-name" class="panic-subtitle">Opponent completed 4 of a kind!</p>
+
+            <div class="panic-timer-box">
+                <span class="timer-label">YOUR REACTION TIME:</span>
+                <span id="panic-timer-display" class="timer-digits">0 ms</span>
+            </div>
+
+            <button id="btn-panic-submit" class="btn btn-panic-rush">
+                🚨 TAP SUBMIT NOW! 🚨
+            </button>
+            <p class="panic-hint">Bots take 1000ms+ to react • Faster tap = Higher place!</p>
+        </div>
+    </div>
+
+    <!-- ================= 7. ROUND RESULTS MODAL ================= -->
+    <div id="modal-round-result" class="modal-overlay">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2 id="round-result-title">Round 1 Results</h2>
+                <p>Revealed hands and reaction scores</p>
+            </div>
+
+            <div id="round-rankings-list" class="round-rankings-list">
+                <!-- Injected via JS -->
+            </div>
+
+            <div class="modal-footer">
+                <p id="round-waiting-host" style="display: none; color: #94a3b8; font-size: 0.9rem;">Waiting for host to proceed...</p>
+                <button id="btn-next-round" class="btn btn-primary btn-glow">Next Round →</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= 8. TOURNAMENT PODIUM (GAME OVER) MODAL ================= -->
+    <div id="modal-game-podium" class="modal-overlay">
+        <div class="modal-card podium-card">
+            <div class="modal-header">
+                <span class="trophy-icon">🏆</span>
+                <h2>Tournament Grand Champions!</h2>
+                <p>All rounds complete. Final leaderboard standings:</p>
+            </div>
+
+            <div class="podium-stage">
+                <div class="podium-column place-2">
+                    <div class="podium-avatar" id="podium-p2-name">🤖 Alex</div>
+                    <div class="podium-block">
+                        <span class="podium-rank-num">🥈 2nd</span>
+                        <span class="podium-pts" id="podium-p2-score">0 pts</span>
+                    </div>
+                </div>
+                <div class="podium-column place-1">
+                    <div class="podium-crown">👑</div>
+                    <div class="podium-avatar" id="podium-p1-name">😎 You</div>
+                    <div class="podium-block">
+                        <span class="podium-rank-num">🥇 1st</span>
+                        <span class="podium-pts" id="podium-p1-score">0 pts</span>
+                    </div>
+                </div>
+                <div class="podium-column place-3">
+                    <div class="podium-avatar" id="podium-p3-name">🦊 Sam</div>
+                    <div class="podium-block">
+                        <span class="podium-rank-num">🥉 3rd</span>
+                        <span class="podium-pts" id="podium-p3-score">0 pts</span>
+                    </div>
+                </div>
+            </div>
+
+            <div id="podium-full-leaderboard" class="podium-full-leaderboard">
+                <!-- Injected via JS -->
+            </div>
+
+            <div class="modal-footer">
+                <button id="btn-new-tournament" class="btn btn-primary btn-glow">🎮 Play New Tournament</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= 9. HOW TO PLAY / RULES MODAL ================= -->
+    <div id="modal-rules" class="modal-overlay">
+        <div class="modal-card rules-card">
+            <div class="modal-header">
+                <h2>📖 How to Play "SHOW"</h2>
+                <p>The 3 to 8 player card passing & fast reaction party game</p>
+            </div>
+
+            <div class="rules-body">
+                <div class="rule-step">
+                    <div class="step-num">1</div>
+                    <div class="step-desc">
+                        <strong>Scalable Cards Dealt (4 Cards Each):</strong>
+                        <p>Total cards = <strong>Players × 4</strong> (e.g. 4 players = 16 cards, 5 players = 20 cards, 6 players = 24 cards). Each player secretly receives 4 cards.</p>
+                    </div>
+                </div>
+
+                <div class="rule-step">
+                    <div class="step-num">2</div>
+                    <div class="step-desc">
+                        <strong>Pass Cards Clockwise:</strong>
+                        <p>Each turn, choose 1 card from your 4 cards to pass to the next player. Aim to collect <strong>4 cards of the exact same name</strong>!</p>
+                    </div>
+                </div>
+
+                <div class="rule-step">
+                    <div class="step-num">3</div>
+                    <div class="step-desc">
+                        <strong>Complete 4-of-a-Kind & Call SHOW:</strong>
+                        <p>As soon as all your 4 cards match, hit <strong>SUBMIT</strong>! This awards you 1st Place points and triggers an emergency alarm for everyone else.</p>
+                    </div>
+                </div>
+
+                <div class="rule-step">
+                    <div class="step-num">4</div>
+                    <div class="step-desc">
+                        <strong>The "SHOW!" Reaction Rush:</strong>
+                        <p>When "SHOW!" flashes on everyone's screen, all other players must press <strong>SUBMIT</strong> as fast as lightning! Faster reaction time = Higher place and more points.</p>
+                    </div>
+                </div>
+
+                <div class="rule-step">
+                    <div class="step-num">5</div>
+                    <div class="step-desc">
+                        <strong>Host-Customized Scoring & Rounds:</strong>
+                        <p>The host configures points for every rank and the number of rounds (e.g., 5 or 7 rounds). The player with the highest total points wins the Tournament Championship!</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="modal-footer">
+                <button id="btn-close-rules" class="btn btn-primary">Got It! Let's Play →</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="audio.js"></script>
+    <script src="network.js"></script>
+    <script src="game.js"></script>
+</body>
+</html>
