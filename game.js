@@ -559,10 +559,25 @@ class ShowGame {
         net.on('host_lobby_update', (msg) => {
             this.settings = msg.settings;
             this.players = msg.players;
-            this.mySeatIndex = msg.yourSeat;
             
-            document.getElementById('lobby-rules-summary').innerText = 
-                `${this.settings.playerCount} Players • ${this.settings.totalRounds} Rounds • 1st: ${this.settings.points[0]}pts`;
+            // Find my own seat by peerId
+            const myPeerId = window.networkEngine.myClientId;
+            const foundSeat = this.players.findIndex(p => p.peerId === myPeerId || p.id === myPeerId);
+            if (foundSeat !== -1) {
+                this.mySeatIndex = foundSeat;
+            }
+            
+            const summaryEl = document.getElementById('lobby-rules-summary');
+            if (summaryEl && this.settings) {
+                const themeObj = THEMES[this.settings.theme] || THEMES.royal;
+                summaryEl.innerText = 
+                    `${this.settings.playerCount} Players (${this.settings.playerCount * 4} Cards) • ${this.settings.totalRounds} Rounds • 1st: ${this.settings.points[0]}pts • ${themeObj.name}`;
+            }
+
+            const noticeEl = document.getElementById('lobby-waiting-notice');
+            if (noticeEl && this.players[this.mySeatIndex]) {
+                noticeEl.innerText = `Connected as ${this.players[this.mySeatIndex].name}! Waiting for host to start...`;
+            }
             
             this.updateLobbyUI();
         });
@@ -586,6 +601,13 @@ class ShowGame {
             this.settings = msg.settings;
             this.players = msg.players;
             this.currentRound = msg.currentRound;
+
+            const myPeerId = window.networkEngine.myClientId;
+            const foundSeat = this.players.findIndex(p => p.peerId === myPeerId || p.id === myPeerId);
+            if (foundSeat !== -1) {
+                this.mySeatIndex = foundSeat;
+            }
+
             this.setScreen('gameTable');
             this.renderGameTable();
         });
@@ -685,17 +707,12 @@ class ShowGame {
 
     broadcastLobbyUpdate() {
         if (!this.isHost) return;
-        this.players.forEach((p, idx) => {
-            if (!p.isAI && p.peerId) {
-                window.networkEngine.sendToClient(p.peerId, {
-                    type: 'LOBBY_UPDATE',
-                    settings: this.settings,
-                    players: this.players.map(pl => ({
-                        id: pl.id, seat: pl.seat, name: pl.name, avatar: pl.avatar, isAI: pl.isAI, score: pl.score
-                    })),
-                    yourSeat: idx
-                });
-            }
+        window.networkEngine.broadcast({
+            type: 'LOBBY_UPDATE',
+            settings: this.settings,
+            players: this.players.map(pl => ({
+                id: pl.id, seat: pl.seat, name: pl.name, avatar: pl.avatar, isAI: pl.isAI, score: pl.score, peerId: pl.peerId
+            }))
         });
     }
 

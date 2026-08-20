@@ -5,10 +5,7 @@
  * Features automatic join retry, heartbeat, and instant room synchronization.
  */
 
-const BROKER_SERVERS = [
-    { host: 'broker.hivemq.com', port: 8884, path: '/mqtt', ssl: true, url: 'wss://broker.hivemq.com:8884/mqtt' },
-    { host: 'broker.emqx.io', port: 8084, path: '/mqtt', ssl: true, url: 'wss://broker.emqx.io:8084/mqtt' }
-];
+const PRIMARY_BROKER = { host: 'broker.hivemq.com', port: 8884, path: '/mqtt', ssl: true, url: 'wss://broker.hivemq.com:8884/mqtt' };
 
 class NetworkEngine {
     constructor() {
@@ -16,11 +13,10 @@ class NetworkEngine {
         this.mqttClient = null;
         this.isHost = false;
         this.roomCode = null;
-        this.myClientId = 'p_' + Math.random().toString(36).substring(2, 8) + '_' + Math.floor(Math.random() * 1000);
+        this.myClientId = 'p_' + Math.random().toString(36).substring(2, 8) + '_' + Math.floor(Math.random() * 10000);
         this.isMultiplayer = false;
         this.eventListeners = new Map();
         this.connected = false;
-        this.currentBrokerIdx = 0;
         this.joinRetryInterval = null;
         this.lobbyReceived = false;
     }
@@ -55,13 +51,12 @@ class NetworkEngine {
             return;
         }
 
-        const broker = BROKER_SERVERS[this.currentBrokerIdx % BROKER_SERVERS.length];
-        console.log(`[Multiplayer] Connecting to ${broker.host}:${broker.port}...`);
+        console.log(`[Multiplayer] Connecting to ${PRIMARY_BROKER.host}:${PRIMARY_BROKER.port}...`);
 
         // 1. Try Paho MQTT (pure browser WebSocket)
         if (typeof Paho !== 'undefined' && Paho.MQTT) {
             try {
-                this.pahoClient = new Paho.MQTT.Client(broker.host, broker.port, broker.path || '/mqtt', this.myClientId);
+                this.pahoClient = new Paho.MQTT.Client(PRIMARY_BROKER.host, PRIMARY_BROKER.port, PRIMARY_BROKER.path || '/mqtt', this.myClientId);
 
                 this.pahoClient.onConnectionLost = (responseObject) => {
                     this.connected = false;
@@ -78,8 +73,8 @@ class NetworkEngine {
                 };
 
                 this.pahoClient.connect({
-                    useSSL: broker.ssl,
-                    timeout: 8,
+                    useSSL: PRIMARY_BROKER.ssl,
+                    timeout: 10,
                     keepAliveInterval: 30,
                     cleanSession: true,
                     onSuccess: () => {
@@ -88,8 +83,8 @@ class NetworkEngine {
                         if (onConnected) onConnected();
                     },
                     onFailure: (err) => {
-                        console.warn("[Multiplayer] Paho connect failed, trying next broker...", err);
-                        this.tryNext(onConnected, onError);
+                        console.warn("[Multiplayer] Paho connect failed, trying MQTT.js...", err);
+                        this.connectMQTTJS(onConnected, onError);
                     }
                 });
                 return;
@@ -98,13 +93,16 @@ class NetworkEngine {
             }
         }
 
-        // 2. Fallback to MQTT.js
+        this.connectMQTTJS(onConnected, onError);
+    }
+
+    connectMQTTJS(onConnected, onError) {
         if (typeof mqtt !== 'undefined') {
             try {
-                this.mqttClient = mqtt.connect(broker.url, {
+                this.mqttClient = mqtt.connect(PRIMARY_BROKER.url, {
                     clientId: this.myClientId,
                     clean: true,
-                    connectTimeout: 8000,
+                    connectTimeout: 10000,
                     reconnectPeriod: 2000
                 });
 
@@ -125,24 +123,15 @@ class NetworkEngine {
 
                 this.mqttClient.on('error', (err) => {
                     console.warn("[Multiplayer] MQTT.js error:", err);
-                    if (!this.connected) this.tryNext(onConnected, onError);
+                    if (!this.connected && onError) onError(err);
                 });
                 return;
             } catch (e) {
                 console.warn("[Multiplayer] MQTT.js connect error:", e);
+                if (onError) onError(e);
             }
-        }
-
-        // If neither library is present
-        if (onError) onError(new Error("No multiplayer WebSocket library loaded."));
-    }
-
-    tryNext(onConnected, onError) {
-        this.currentBrokerIdx++;
-        if (this.currentBrokerIdx < BROKER_SERVERS.length * 2) {
-            setTimeout(() => this.connect(onConnected, onError), 1000);
         } else {
-            if (onError) onError(new Error("Unable to reach multiplayer servers. Check internet."));
+            if (onError) onError(new Error("No multiplayer WebSocket library loaded."));
         }
     }
 
