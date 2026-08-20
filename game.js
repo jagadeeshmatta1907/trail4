@@ -566,6 +566,8 @@ class ShowGame {
             this.players[this.mySeatIndex].hand = msg.yourHand;
             this.gameState = 'PASSING';
             this.currentTurnSeat = msg.firstTurnSeat;
+            this.showTriggered = false;
+            this.roundConcluded = false;
             this.selectedCardIndex = null;
             this.incomingCard = null;
             this.screens.roundResult.classList.remove('active');
@@ -644,6 +646,7 @@ class ShowGame {
             this.currentTurnSeat = msg.firstTurnSeat;
             this.gameState = 'PASSING';
             this.showTriggered = false;
+            this.roundConcluded = false;
             this.incomingCard = null;
             this.selectedCardIndex = null;
             this.renderGameTable();
@@ -1112,7 +1115,8 @@ class ShowGame {
         const center = document.getElementById('pass-animation-zone');
         const flightEl = document.getElementById('flight-card-element');
         if (center) {
-            if (flightEl && card) flightEl.innerText = card.symbol || '🂠';
+            // Cards are passed face-down so secret card identity is never revealed to anyone
+            if (flightEl) flightEl.innerText = '🂠';
             center.classList.add('animating');
             setTimeout(() => {
                 center.classList.remove('animating');
