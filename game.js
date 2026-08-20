@@ -615,6 +615,11 @@ class ShowGame {
             this.triggerShowOverlay(msg.callerSeat, msg.callerName);
         });
 
+        net.on('client_declare_show', (msg) => {
+            if (!this.isHost) return;
+            this.handleShowDeclaration(msg.seatIndex);
+        });
+
         net.on('client_submit_show', (msg) => {
             if (!this.isHost) return;
             this.recordPlayerSubmit(msg.seatIndex, msg.timestamp);
@@ -1125,7 +1130,16 @@ class ShowGame {
             return;
         }
 
-        this.handleShowDeclaration(this.mySeatIndex);
+        if (this.isHost) {
+            this.handleShowDeclaration(this.mySeatIndex);
+        } else {
+            // Client triggers local overlay and notifies host
+            this.triggerShowOverlay(this.mySeatIndex, myPlayer.name);
+            window.networkEngine.sendToHost({
+                type: 'DECLARE_SHOW',
+                seatIndex: this.mySeatIndex
+            });
+        }
     }
 
     handleHumanPanicSubmit() {
@@ -1133,17 +1147,17 @@ class ShowGame {
         if (myPlayer.hasSubmitted) return;
 
         window.soundEngine.playBuzzer();
+        myPlayer.hasSubmitted = true;
+        this.updatePanicBtn('✓ Submitted! Waiting for others...', true);
 
         if (this.isHost) {
             this.recordPlayerSubmit(this.mySeatIndex, performance.now());
         } else {
-            myPlayer.hasSubmitted = true;
             window.networkEngine.sendToHost({
                 type: 'SUBMIT_SHOW',
                 seatIndex: this.mySeatIndex,
                 timestamp: performance.now()
             });
-            this.updatePanicBtn('✓ Submitted! Waiting for others...', true);
         }
     }
 
@@ -1160,7 +1174,8 @@ class ShowGame {
         caller.reactionTime = 0;
         caller.rank = 1;
 
-        if (this.isHost && !this.isSinglePlayer) {
+        // Broadcast to all clients in the room
+        if (!this.isSinglePlayer) {
             window.networkEngine.broadcast({
                 type: 'SHOW_TRIGGERED',
                 callerSeat: callerSeat,

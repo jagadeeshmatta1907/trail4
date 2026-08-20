@@ -273,6 +273,12 @@ class NetworkEngine {
                         timestamp: msg.timestamp || performance.now()
                     });
                     break;
+                case 'DECLARE_SHOW':
+                    this.emit('client_declare_show', {
+                        peerId: msg.peerId,
+                        seatIndex: msg.seatIndex
+                    });
+                    break;
                 default:
                     this.emit('client_custom_msg', { sender: msg.peerId, message: msg });
             }
