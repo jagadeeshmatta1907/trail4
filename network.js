@@ -1,27 +1,28 @@
 /**
- * SHOW! Card Game - High-Performance Real-Time Multiplayer Network Engine
- * Uses secure WebSockets (WSS) Pub/Sub Relay with Multi-Broker Failover.
+ * SHOW! Card Game - Rock-Solid Real-Time Multiplayer Network Engine
+ * Supports Paho MQTT & MQTT.js with Multi-Broker Global Failover (HiveMQ & EMQX).
  * 100% Mobile 4G/5G Carrier-Grade NAT & Firewall friendly.
- * Zero setup required - instant room joins anywhere in the world!
+ * Features automatic join retry, heartbeat, and instant room synchronization.
  */
 
-const PUBLIC_BROKERS = [
-    'wss://broker.hivemq.com:8884/mqtt',
-    'wss://broker.emqx.io:8084/mqtt',
-    'wss://test.mosquitto.org:8081'
+const BROKER_SERVERS = [
+    { host: 'broker.hivemq.com', port: 8884, path: '/mqtt', ssl: true, url: 'wss://broker.hivemq.com:8884/mqtt' },
+    { host: 'broker.emqx.io', port: 8084, path: '/mqtt', ssl: true, url: 'wss://broker.emqx.io:8084/mqtt' }
 ];
 
 class NetworkEngine {
     constructor() {
-        this.client = null;
+        this.pahoClient = null;
+        this.mqttClient = null;
         this.isHost = false;
         this.roomCode = null;
-        this.myClientId = 'client_' + Math.random().toString(36).substring(2, 9) + Date.now().toString(36);
+        this.myClientId = 'p_' + Math.random().toString(36).substring(2, 8) + '_' + Math.floor(Math.random() * 1000);
         this.isMultiplayer = false;
         this.eventListeners = new Map();
-        this.currentBrokerIndex = 0;
         this.connected = false;
-        this.clientPeerIds = new Set();
+        this.currentBrokerIdx = 0;
+        this.joinRetryInterval = null;
+        this.lobbyReceived = false;
     }
 
     on(event, callback) {
@@ -48,81 +49,134 @@ class NetworkEngine {
         return code;
     }
 
-    connectBroker(onConnected, onError) {
-        if (this.connected && this.client) {
+    connect(onConnected, onError) {
+        if (this.connected) {
             if (onConnected) onConnected();
             return;
         }
 
-        if (typeof mqtt === 'undefined') {
-            console.error("MQTT.js library not loaded. Falling back to simulated network.");
-            if (onError) onError(new Error("Multiplayer library not loaded"));
-            return;
+        const broker = BROKER_SERVERS[this.currentBrokerIdx % BROKER_SERVERS.length];
+        console.log(`[Multiplayer] Connecting to ${broker.host}:${broker.port}...`);
+
+        // 1. Try Paho MQTT (pure browser WebSocket)
+        if (typeof Paho !== 'undefined' && Paho.MQTT) {
+            try {
+                this.pahoClient = new Paho.MQTT.Client(broker.host, broker.port, broker.path || '/mqtt', this.myClientId);
+
+                this.pahoClient.onConnectionLost = (responseObject) => {
+                    this.connected = false;
+                    console.warn("[Multiplayer] Connection lost:", responseObject.errorMessage);
+                };
+
+                this.pahoClient.onMessageArrived = (message) => {
+                    try {
+                        const parsed = JSON.parse(message.payloadString);
+                        this.handleIncomingMessage(message.destinationName, parsed);
+                    } catch (e) {
+                        console.error("[Multiplayer] Error parsing message:", e);
+                    }
+                };
+
+                this.pahoClient.connect({
+                    useSSL: broker.ssl,
+                    timeout: 8,
+                    keepAliveInterval: 30,
+                    cleanSession: true,
+                    onSuccess: () => {
+                        this.connected = true;
+                        console.log("[Multiplayer] Connected via Paho MQTT!");
+                        if (onConnected) onConnected();
+                    },
+                    onFailure: (err) => {
+                        console.warn("[Multiplayer] Paho connect failed, trying next broker...", err);
+                        this.tryNext(onConnected, onError);
+                    }
+                });
+                return;
+            } catch (e) {
+                console.warn("[Multiplayer] Paho error:", e);
+            }
         }
 
-        const brokerUrl = PUBLIC_BROKERS[this.currentBrokerIndex % PUBLIC_BROKERS.length];
-        console.log(`Connecting to multiplayer broker: ${brokerUrl}`);
+        // 2. Fallback to MQTT.js
+        if (typeof mqtt !== 'undefined') {
+            try {
+                this.mqttClient = mqtt.connect(broker.url, {
+                    clientId: this.myClientId,
+                    clean: true,
+                    connectTimeout: 8000,
+                    reconnectPeriod: 2000
+                });
 
-        try {
-            this.client = mqtt.connect(brokerUrl, {
-                clientId: this.myClientId,
-                clean: true,
-                connectTimeout: 8000,
-                reconnectPeriod: 2000,
-                keepalive: 30
-            });
+                this.mqttClient.on('connect', () => {
+                    this.connected = true;
+                    console.log("[Multiplayer] Connected via MQTT.js!");
+                    if (onConnected) onConnected();
+                });
 
-            let connectTimeout = setTimeout(() => {
-                if (!this.connected) {
-                    console.warn("Broker connection timed out, trying next broker...");
-                    this.tryNextBroker(onConnected, onError);
-                }
-            }, 8000);
+                this.mqttClient.on('message', (topic, payload) => {
+                    try {
+                        const parsed = JSON.parse(payload.toString());
+                        this.handleIncomingMessage(topic, parsed);
+                    } catch (e) {
+                        console.error("[Multiplayer] Error parsing MQTT.js payload:", e);
+                    }
+                });
 
-            this.client.on('connect', () => {
-                clearTimeout(connectTimeout);
-                this.connected = true;
-                console.log("Connected to multiplayer network!");
-                if (onConnected) onConnected();
-            });
+                this.mqttClient.on('error', (err) => {
+                    console.warn("[Multiplayer] MQTT.js error:", err);
+                    if (!this.connected) this.tryNext(onConnected, onError);
+                });
+                return;
+            } catch (e) {
+                console.warn("[Multiplayer] MQTT.js connect error:", e);
+            }
+        }
 
-            this.client.on('message', (topic, payload) => {
-                try {
-                    const message = JSON.parse(payload.toString());
-                    this.handleIncomingMessage(topic, message);
-                } catch (e) {
-                    console.error("Error parsing message from topic", topic, e);
-                }
-            });
+        // If neither library is present
+        if (onError) onError(new Error("No multiplayer WebSocket library loaded."));
+    }
 
-            this.client.on('error', (err) => {
-                console.warn("MQTT error:", err);
-                if (!this.connected) {
-                    clearTimeout(connectTimeout);
-                    this.tryNextBroker(onConnected, onError);
-                }
-            });
-
-            this.client.on('close', () => {
-                this.connected = false;
-            });
-
-        } catch (err) {
-            console.error("MQTT connect exception:", err);
-            this.tryNextBroker(onConnected, onError);
+    tryNext(onConnected, onError) {
+        this.currentBrokerIdx++;
+        if (this.currentBrokerIdx < BROKER_SERVERS.length * 2) {
+            setTimeout(() => this.connect(onConnected, onError), 1000);
+        } else {
+            if (onError) onError(new Error("Unable to reach multiplayer servers. Check internet."));
         }
     }
 
-    tryNextBroker(onConnected, onError) {
-        if (this.client) {
-            try { this.client.end(true); } catch(e) {}
-            this.client = null;
+    subscribe(topic, onDone) {
+        if (this.pahoClient && this.connected) {
+            this.pahoClient.subscribe(topic, {
+                qos: 1,
+                onSuccess: () => { if (onDone) onDone(); },
+                onFailure: (e) => { console.error("Subscribe fail:", e); if (onDone) onDone(e); }
+            });
+        } else if (this.mqttClient && this.connected) {
+            this.mqttClient.subscribe(topic, { qos: 1 }, (err) => {
+                if (onDone) onDone(err);
+            });
         }
-        this.currentBrokerIndex++;
-        if (this.currentBrokerIndex < PUBLIC_BROKERS.length * 2) {
-            this.connectBroker(onConnected, onError);
-        } else {
-            if (onError) onError(new Error("Unable to connect to multiplayer server. Check internet."));
+    }
+
+    publish(topic, data) {
+        const payload = JSON.stringify({ ...data, senderId: this.myClientId });
+        if (this.pahoClient && this.connected) {
+            try {
+                const message = new Paho.MQTT.Message(payload);
+                message.destinationName = topic;
+                message.qos = 1;
+                this.pahoClient.send(message);
+            } catch (e) {
+                console.error("Publish error:", e);
+            }
+        } else if (this.mqttClient && this.connected) {
+            try {
+                this.mqttClient.publish(topic, payload, { qos: 1 });
+            } catch (e) {
+                console.error("MQTT.js publish error:", e);
+            }
         }
     }
 
@@ -131,17 +185,14 @@ class NetworkEngine {
         this.isMultiplayer = true;
         this.roomCode = (roomCode || this.generateRoomCode()).toUpperCase().trim();
 
-        this.connectBroker(() => {
-            const hostTopic = `showgame/v3/${this.roomCode}/host`;
-            const allTopic  = `showgame/v3/${this.roomCode}/all`;
-
-            this.client.subscribe([hostTopic, allTopic], { qos: 1 }, (err) => {
+        this.connect(() => {
+            const roomTopic = `showgame/v4/${this.roomCode}/#`;
+            this.subscribe(roomTopic, (err) => {
                 if (err) {
-                    console.error("Subscription error:", err);
                     if (onError) onError(err);
                     return;
                 }
-                console.log(`Host ready for room ${this.roomCode}`);
+                console.log(`[Multiplayer] Host created room: ${this.roomCode}`);
                 if (onReady) onReady(this.roomCode);
                 this.emit('host_ready', { roomCode: this.roomCode });
             });
@@ -152,43 +203,57 @@ class NetworkEngine {
         this.isHost = false;
         this.isMultiplayer = true;
         this.roomCode = roomCode.toUpperCase().trim();
+        this.lobbyReceived = false;
 
-        this.connectBroker(() => {
-            const myDirectTopic = `showgame/v3/${this.roomCode}/client/${this.myClientId}`;
-            const allTopic      = `showgame/v3/${this.roomCode}/all`;
-
-            this.client.subscribe([myDirectTopic, allTopic], { qos: 1 }, (err) => {
+        this.connect(() => {
+            const roomTopic = `showgame/v4/${this.roomCode}/#`;
+            this.subscribe(roomTopic, (err) => {
                 if (err) {
-                    console.error("Client subscription error:", err);
                     if (onError) onError(err);
                     return;
                 }
 
-                // Send join request to host
-                const hostTopic = `showgame/v3/${this.roomCode}/host`;
-                this.client.publish(hostTopic, JSON.stringify({
-                    type: 'JOIN_REQUEST',
-                    playerData: playerData,
-                    peerId: this.myClientId,
-                    timestamp: Date.now()
-                }), { qos: 1 });
-
+                console.log(`[Multiplayer] Client joined room: ${this.roomCode}`);
                 if (onConnected) onConnected(this.roomCode);
                 this.emit('connected_to_host', { roomCode: this.roomCode });
+
+                // Send join request immediately
+                this.sendJoinRequest(playerData);
+
+                // Auto-retry sending join request every 1.5s until lobby update is received
+                clearInterval(this.joinRetryInterval);
+                let attempts = 0;
+                this.joinRetryInterval = setInterval(() => {
+                    if (this.lobbyReceived || attempts >= 8) {
+                        clearInterval(this.joinRetryInterval);
+                        return;
+                    }
+                    attempts++;
+                    console.log(`[Multiplayer] Retrying join request (attempt ${attempts})...`);
+                    this.sendJoinRequest(playerData);
+                }, 1500);
             });
         }, onError);
+    }
+
+    sendJoinRequest(playerData) {
+        const topic = `showgame/v4/${this.roomCode}/join`;
+        this.publish(topic, {
+            type: 'JOIN_REQUEST',
+            playerData: playerData,
+            peerId: this.myClientId
+        });
     }
 
     handleIncomingMessage(topic, msg) {
         if (!msg || !msg.type) return;
 
         // Ignore messages sent by self
-        if (msg.senderClientId === this.myClientId) return;
+        if (msg.senderId === this.myClientId) return;
 
         if (this.isHost) {
             switch (msg.type) {
                 case 'JOIN_REQUEST':
-                    this.clientPeerIds.add(msg.peerId);
                     this.emit('client_join_request', {
                         peerId: msg.peerId,
                         playerData: msg.playerData
@@ -212,45 +277,55 @@ class NetworkEngine {
                     this.emit('client_custom_msg', { sender: msg.peerId, message: msg });
             }
         } else {
-            // Client message handling
+            // Client message handler
+            if (msg.type === 'LOBBY_UPDATE') {
+                this.lobbyReceived = true;
+                clearInterval(this.joinRetryInterval);
+            }
+
+            // Only process direct messages if targeted to me, or broadcasts targeted to all
+            if (msg.targetClientId && msg.targetClientId !== this.myClientId) {
+                return;
+            }
+
             const eventName = `host_${msg.type.toLowerCase()}`;
             this.emit(eventName, msg);
         }
     }
 
     sendToClient(peerId, message) {
-        if (!this.client || !this.connected || !this.roomCode) return;
-        const topic = `showgame/v3/${this.roomCode}/client/${peerId}`;
-        const payload = { ...message, senderClientId: this.myClientId };
-        this.client.publish(topic, JSON.stringify(payload), { qos: 1 });
+        if (!this.roomCode) return;
+        const topic = `showgame/v4/${this.roomCode}/direct`;
+        this.publish(topic, { ...message, targetClientId: peerId });
     }
 
     broadcast(message) {
-        if (!this.client || !this.connected || !this.roomCode) return;
-        const topic = `showgame/v3/${this.roomCode}/all`;
-        const payload = { ...message, senderClientId: this.myClientId };
-        this.client.publish(topic, JSON.stringify(payload), { qos: 1 });
+        if (!this.roomCode) return;
+        const topic = `showgame/v4/${this.roomCode}/broadcast`;
+        this.publish(topic, message);
     }
 
     sendToHost(message) {
-        if (!this.client || !this.connected || !this.roomCode) return;
-        const topic = `showgame/v3/${this.roomCode}/host`;
-        const payload = { ...message, peerId: this.myClientId, senderClientId: this.myClientId };
-        this.client.publish(topic, JSON.stringify(payload), { qos: 1 });
+        if (!this.roomCode) return;
+        const topic = `showgame/v4/${this.roomCode}/tohost`;
+        this.publish(topic, { ...message, peerId: this.myClientId });
     }
 
     disconnect() {
-        if (this.client) {
-            try {
-                this.client.end(true);
-            } catch (e) {}
-            this.client = null;
+        clearInterval(this.joinRetryInterval);
+        if (this.pahoClient && this.connected) {
+            try { this.pahoClient.disconnect(); } catch (e) {}
         }
+        if (this.mqttClient) {
+            try { this.mqttClient.end(true); } catch (e) {}
+        }
+        this.pahoClient = null;
+        this.mqttClient = null;
         this.connected = false;
         this.isMultiplayer = false;
         this.isHost = false;
         this.roomCode = null;
-        this.clientPeerIds.clear();
+        this.lobbyReceived = false;
     }
 }
 
