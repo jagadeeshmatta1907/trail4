@@ -503,7 +503,7 @@ class ShowGame {
             if (!this.isHost) return;
 
             let assignedSeat = -1;
-            // Check if player already exists
+            // Check if player already exists (reconnect)
             for (let i = 1; i < this.players.length; i++) {
                 if (this.players[i].peerId === data.peerId) {
                     assignedSeat = i;
@@ -537,9 +537,22 @@ class ShowGame {
                     rank: null
                 };
 
+                // Confirm seat to the joining player
+                window.networkEngine.sendToClient(data.peerId, {
+                    type: 'SEAT_ASSIGNED',
+                    yourSeat: assignedSeat
+                });
+
                 this.broadcastLobbyUpdate();
                 this.updateLobbyUI();
                 this.showToast(`${data.playerData.name} joined the room!`);
+            } else {
+                // Room is full — send rejection back to the player who tried to join
+                window.networkEngine.sendToClient(data.peerId, {
+                    type: 'ROOM_FULL',
+                    message: 'Room is full! All player slots are taken.'
+                });
+                this.showToast(`Room is full — ${data.playerData?.name || 'Someone'} could not join.`);
             }
         });
 
@@ -552,6 +565,21 @@ class ShowGame {
                 `${this.settings.playerCount} Players • ${this.settings.totalRounds} Rounds • 1st: ${this.settings.points[0]}pts`;
             
             this.updateLobbyUI();
+        });
+
+        net.on('host_room_full', (msg) => {
+            // Host rejected us — room is full
+            this.setScreen('joinRoom');
+            const joinBtn = document.getElementById('btn-confirm-join-room');
+            if (joinBtn) { joinBtn.disabled = false; joinBtn.innerText = 'Join Lobby →'; }
+            alert('❌ Room is full! All player slots are taken. Please try a different room code.');
+        });
+
+        net.on('host_seat_assigned', (msg) => {
+            // Store our seat index when host confirms our seat
+            if (msg.yourSeat !== undefined) {
+                this.mySeatIndex = msg.yourSeat;
+            }
         });
 
         net.on('host_game_start', (msg) => {
@@ -716,6 +744,7 @@ class ShowGame {
         this.incomingCard        = null;
         this.passesThisRound     = 0;
         clearTimeout(this.forceConcludeTimer);
+        this.clearTurnTimer();
         this.clearAITimers();
 
         this.players.forEach(p => {
@@ -828,6 +857,77 @@ class ShowGame {
         }
 
         this.renderGameTable();
+
+        // Start the 10-second turn countdown (host manages for all players)
+        if (this.isHost && this.gameState === 'PASSING' && !this.showTriggered) {
+            this.startTurnTimer();
+        }
+    }
+
+    startTurnTimer() {
+        this.clearTurnTimer();
+        const TURN_SECONDS = 10;
+        let remaining = TURN_SECONDS;
+        const seat = this.currentTurnSeat;
+        const player = this.players[seat];
+        if (!player || this.showTriggered || this.gameState !== 'PASSING') return;
+
+        const turnBanner = document.getElementById('turn-banner');
+
+        this.turnTimerInterval = setInterval(() => {
+            if (this.showTriggered || this.gameState !== 'PASSING' || this.currentTurnSeat !== seat) {
+                this.clearTurnTimer();
+                return;
+            }
+            remaining--;
+
+            // Update banner with countdown
+            if (turnBanner) {
+                if (seat === this.mySeatIndex) {
+                    turnBanner.innerText = `🟢 YOUR TURN — ${remaining}s left! Pick 1 card to PASS →`;
+                    turnBanner.className = remaining <= 3 ? 'turn-banner my-turn urgent' : 'turn-banner my-turn';
+                } else {
+                    turnBanner.innerText = `⏳ ${player.name} — ${remaining}s to pass...`;
+                }
+            }
+
+            if (remaining <= 0) {
+                this.clearTurnTimer();
+                // Auto-pass: pick a random card from the current player's hand
+                const p = this.players[seat];
+                if (!p || !p.hand || p.hand.length === 0) return;
+                // Choose the card that matches least (or just first)
+                const card = this.botChooseCardToPass(seat) || p.hand[0];
+                const removeIdx = p.hand.findIndex(c => c && c.uid === card.uid);
+                if (removeIdx !== -1) p.hand.splice(removeIdx, 1);
+
+                if (seat === this.mySeatIndex) {
+                    // It was my turn and I ran out of time — pass automatically
+                    this.selectedCardIndex = null;
+                    this.incomingCard = null;
+                    this.showToast('⏰ Time up! Card auto-passed.');
+                    if (!this.isHost) {
+                        window.networkEngine.sendToHost({
+                            type: 'PASS_CARD',
+                            card: card,
+                            fromSeat: seat
+                        });
+                        this.renderPlayerHand();
+                        this.updateTurnUI();
+                        return;
+                    }
+                }
+
+                this.executeNextTurnPass(seat, card);
+            }
+        }, 1000);
+    }
+
+    clearTurnTimer() {
+        if (this.turnTimerInterval) {
+            clearInterval(this.turnTimerInterval);
+            this.turnTimerInterval = null;
+        }
     }
 
     handleHumanPassCard() {
@@ -838,6 +938,8 @@ class ShowGame {
             return;
         }
         if (this.showTriggered) return;
+
+        this.clearTurnTimer(); // Stop countdown when player acts
 
         const myPlayer = this.players[this.mySeatIndex];
         const cardToPass = myPlayer.hand[this.selectedCardIndex];
@@ -1170,6 +1272,7 @@ class ShowGame {
     handleShowDeclaration(callerSeat) {
         if (this.showTriggered) return;
         this.clearAITimers();
+        this.clearTurnTimer(); // Stop the per-turn countdown
         this.showTriggered = true;
         this.roundConcluded = false;
         this.showTriggeredBySeat = callerSeat;

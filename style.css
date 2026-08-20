@@ -916,6 +916,19 @@ select:focus {
     color: var(--text-secondary);
 }
 
+.turn-banner.my-turn.urgent {
+    background: linear-gradient(135deg, rgba(239, 68, 68, 0.35), rgba(245, 158, 11, 0.3));
+    border: 2px solid #ef4444;
+    color: #fca5a5;
+    box-shadow: 0 0 24px rgba(239, 68, 68, 0.6);
+    animation: urgentPulse 0.4s infinite alternate;
+}
+
+@keyframes urgentPulse {
+    from { transform: scale(1); box-shadow: 0 0 12px rgba(239, 68, 68, 0.5); }
+    to   { transform: scale(1.04); box-shadow: 0 0 28px rgba(239, 68, 68, 0.9); }
+}
+
 .hand-progress-badge {
     background: rgba(15, 23, 42, 0.85);
     padding: 5px 14px;
