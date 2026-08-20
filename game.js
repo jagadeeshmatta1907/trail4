@@ -622,7 +622,7 @@ class ShowGame {
 
         net.on('client_submit_show', (msg) => {
             if (!this.isHost) return;
-            this.recordPlayerSubmit(msg.seatIndex, msg.timestamp);
+            this.recordPlayerSubmit(msg.seatIndex !== undefined ? msg.seatIndex : msg.peerId, msg.timestamp);
         });
 
         net.on('host_round_result', (msg) => {
@@ -706,11 +706,13 @@ class ShowGame {
     startRound() {
         this.gameState           = 'DEALING';
         this.showTriggered       = false;
+        this.roundConcluded      = false;
         this.showTriggeredBySeat = null;
         this.submitOrder         = [];
         this.selectedCardIndex   = null;
         this.incomingCard        = null;
         this.passesThisRound     = 0;
+        clearTimeout(this.forceConcludeTimer);
         this.clearAITimers();
 
         this.players.forEach(p => {
@@ -1165,10 +1167,11 @@ class ShowGame {
         if (this.showTriggered) return;
         this.clearAITimers();
         this.showTriggered = true;
+        this.roundConcluded = false;
         this.showTriggeredBySeat = callerSeat;
         this.showStartTime = performance.now();
 
-        const caller = this.players[callerSeat];
+        const caller = this.players[callerSeat] || this.players[0];
         this.submitOrder = [callerSeat];
         caller.hasSubmitted = true;
         caller.reactionTime = 0;
@@ -1187,6 +1190,15 @@ class ShowGame {
 
         if (this.isHost) {
             this.triggerAIReactions();
+
+            // Guaranteed safety timer: automatically show leaderboard after 4.5 seconds
+            clearTimeout(this.forceConcludeTimer);
+            this.forceConcludeTimer = setTimeout(() => {
+                if (this.isHost && this.showTriggered && !this.roundConcluded) {
+                    console.log("[Multiplayer] Auto-concluding round after 4.5s timeout...");
+                    this.concludeRound();
+                }
+            }, 4500);
         }
     }
 
@@ -1239,63 +1251,90 @@ class ShowGame {
             }, delay);
             this.aiReactionTimers.push(timer);
         });
-
-        setTimeout(() => {
-            this.players.forEach((p, seat) => {
-                if (!p.hasSubmitted) {
-                    this.recordPlayerSubmit(seat, performance.now());
-                }
-            });
-        }, 7000);
     }
 
-    recordPlayerSubmit(seat, timestamp) {
+    recordPlayerSubmit(seatOrId, timestamp) {
         if (!this.isHost) return;
+        if (this.roundConcluded) return;
+
+        let seat = -1;
+        if (typeof seatOrId === 'number') {
+            seat = seatOrId;
+        } else if (typeof seatOrId === 'string' && !isNaN(parseInt(seatOrId))) {
+            seat = parseInt(seatOrId);
+        } else {
+            seat = this.players.findIndex(p => p.id === seatOrId || p.peerId === seatOrId);
+        }
+
+        if (seat < 0 || seat >= this.players.length) {
+            seat = this.players.findIndex(p => !p.hasSubmitted);
+            if (seat === -1) return;
+        }
 
         const player = this.players[seat];
+        if (!player) return;
         if (player.hasSubmitted) return;
 
         player.hasSubmitted = true;
-        player.reactionTime = Math.max(0, Math.round(timestamp - this.showStartTime));
+        player.reactionTime = Math.max(0, Math.round((timestamp || performance.now()) - this.showStartTime));
         player.rank = this.submitOrder.length + 1;
-        this.submitOrder.push(seat);
+        if (!this.submitOrder.includes(seat)) {
+            this.submitOrder.push(seat);
+        }
 
         if (seat === this.mySeatIndex) {
             clearInterval(this.reactionInterval);
             this.updatePanicBtn('✓ Submitted! Waiting...', true);
         }
 
-        if (this.submitOrder.length === this.players.length) {
+        // Check if all players have submitted
+        const allDone = this.players.every(p => p.hasSubmitted) || (this.submitOrder.length >= this.players.length);
+        if (allDone) {
             clearInterval(this.reactionInterval);
+            clearTimeout(this.forceConcludeTimer);
             setTimeout(() => {
                 this.concludeRound();
-            }, 800);
+            }, 300);
         }
     }
 
     // ================= SCORING & ROUND RESULTS =================
     concludeRound() {
         if (!this.isHost) return;
+        if (this.roundConcluded) return;
+        this.roundConcluded = true;
+        clearTimeout(this.forceConcludeTimer);
+        clearInterval(this.reactionInterval);
 
-        const pointValues = this.settings.points;
+        const pointValues = this.settings.points || [1000, 750, 500, 250, 150, 100, 50, 25];
+
+        // Ensure any unsubmitted player is recorded
+        this.players.forEach((p, s) => {
+            if (!this.submitOrder.includes(s)) {
+                p.hasSubmitted = true;
+                p.reactionTime = p.reactionTime || Math.max(1000, Math.round(performance.now() - this.showStartTime));
+                p.rank = this.submitOrder.length + 1;
+                this.submitOrder.push(s);
+            }
+        });
 
         const results = this.submitOrder.map((seatIdx, rankIdx) => {
-            const player = this.players[seatIdx];
+            const player = this.players[seatIdx] || { name: `Player ${rankIdx+1}`, avatar: '👤', score: 0, hand: [] };
             const pts = pointValues[rankIdx] !== undefined ? pointValues[rankIdx] : 0;
             player.roundScore = pts;
-            player.score += pts;
+            player.score = (player.score || 0) + pts;
             player.rank = rankIdx + 1;
 
             return {
                 seat: seatIdx,
                 name: player.name,
                 avatar: player.avatar,
-                isAI: player.isAI,
+                isAI: !!player.isAI,
                 rank: rankIdx + 1,
                 points: pts,
                 totalScore: player.score,
-                reactionTime: player.reactionTime,
-                hand: [...player.hand],
+                reactionTime: player.reactionTime || 0,
+                hand: player.hand ? [...player.hand] : [],
                 isCaller: (seatIdx === this.showTriggeredBySeat)
             };
         });
