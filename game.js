@@ -1477,30 +1477,32 @@ class ShowGame {
 
         const pointValues = this.settings.points || [1000, 750, 500, 250, 150, 100, 50, 25];
 
-        // Ensure any unsubmitted player is recorded
-        this.players.forEach((p, s) => {
+        // 1. Ensure EVERY single player in the room is accounted for
+        const allSeats = this.players.map((_, idx) => idx);
+        allSeats.forEach(s => {
+            const p = this.players[s];
             if (!p.hasSubmitted) {
                 p.hasSubmitted = true;
                 p.reactionTime = p.reactionTime || Math.max(2000, Math.round(performance.now() - this.showStartTime));
-                if (!this.submitOrder.includes(s)) {
-                    this.submitOrder.push(s);
-                }
             }
         });
 
-        // 1. Separate Caller and others
-        const callerSeat = this.showTriggeredBySeat;
-        const otherSeats = this.submitOrder.filter(s => s !== callerSeat);
+        // 2. Separate Caller (1st place) and others
+        const callerSeat = (this.showTriggeredBySeat !== null && this.showTriggeredBySeat !== undefined) 
+            ? this.showTriggeredBySeat 
+            : 0;
 
-        // 2. Sort other seats by actual reaction time (fastest reaction first)
+        const otherSeats = allSeats.filter(s => s !== callerSeat);
+
+        // 3. Sort all other players strictly by fastest reaction time
         otherSeats.sort((a, b) => {
             const rtA = (this.players[a]?.reactionTime !== undefined) ? this.players[a].reactionTime : 99999;
             const rtB = (this.players[b]?.reactionTime !== undefined) ? this.players[b].reactionTime : 99999;
             return rtA - rtB;
         });
 
-        // 3. Final ranked list: [callerSeat, ...sortedOthers]
-        const finalOrder = (callerSeat !== null && callerSeat !== undefined) ? [callerSeat, ...otherSeats] : otherSeats;
+        // 4. Guaranteed complete final order containing ALL players!
+        const finalOrder = [callerSeat, ...otherSeats];
 
         const results = finalOrder.map((seatIdx, rankIdx) => {
             const player = this.players[seatIdx] || { name: `Player ${rankIdx+1}`, avatar: '👤', score: 0, hand: [] };
