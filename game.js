@@ -713,7 +713,8 @@ class ShowGame {
 
         net.on('client_submit_show', (msg) => {
             if (!this.isHost) return;
-            this.recordPlayerSubmit(msg.seatIndex !== undefined ? msg.seatIndex : msg.peerId, msg.timestamp);
+            const rt = (msg.reactionTime !== undefined) ? msg.reactionTime : msg.timestamp;
+            this.recordPlayerSubmit(msg.seatIndex !== undefined ? msg.seatIndex : msg.peerId, rt);
         });
 
         net.on('host_round_result', (msg) => {
@@ -1306,15 +1307,19 @@ class ShowGame {
 
         window.soundEngine.playBuzzer();
         myPlayer.hasSubmitted = true;
+        
+        const myReactionTime = Math.max(0, Math.round(performance.now() - this.showStartTime));
+        myPlayer.reactionTime = myReactionTime;
+
         this.updatePanicBtn('✓ Submitted! Waiting for others...', true);
 
         if (this.isHost) {
-            this.recordPlayerSubmit(this.mySeatIndex, performance.now());
+            this.recordPlayerSubmit(this.mySeatIndex, myReactionTime);
         } else {
             window.networkEngine.sendToHost({
                 type: 'SUBMIT_SHOW',
                 seatIndex: this.mySeatIndex,
-                timestamp: performance.now()
+                reactionTime: myReactionTime
             });
         }
     }
@@ -1402,15 +1407,16 @@ class ShowGame {
     triggerAIReactions() {
         this.players.forEach((p, seat) => {
             if (!p.isAI || seat === this.showTriggeredBySeat) return;
-            const delay = 1000 + Math.random() * 1800; // 1.0s to 2.8s
+            const delay = 1200 + Math.random() * 1600; // 1.2s to 2.8s
             const timer = setTimeout(() => {
-                this.recordPlayerSubmit(seat, performance.now());
+                const rt = Math.round(delay);
+                this.recordPlayerSubmit(seat, rt);
             }, delay);
             this.aiReactionTimers.push(timer);
         });
     }
 
-    recordPlayerSubmit(seatOrId, timestamp) {
+    recordPlayerSubmit(seatOrId, reactionTime) {
         if (!this.isHost) return;
         if (this.roundConcluded) return;
 
@@ -1433,11 +1439,17 @@ class ShowGame {
         if (player.hasSubmitted) return;
 
         player.hasSubmitted = true;
-        player.reactionTime = Math.max(0, Math.round((timestamp || performance.now()) - this.showStartTime));
-        player.rank = this.submitOrder.length + 1;
+        // Use client's exact local reaction time if provided
+        if (typeof reactionTime === 'number' && reactionTime < 60000) {
+            player.reactionTime = reactionTime;
+        } else {
+            player.reactionTime = Math.max(0, Math.round(performance.now() - this.showStartTime));
+        }
+
         if (!this.submitOrder.includes(seat)) {
             this.submitOrder.push(seat);
         }
+        player.rank = this.submitOrder.length;
 
         if (seat === this.mySeatIndex) {
             clearInterval(this.reactionInterval);
@@ -1467,15 +1479,30 @@ class ShowGame {
 
         // Ensure any unsubmitted player is recorded
         this.players.forEach((p, s) => {
-            if (!this.submitOrder.includes(s)) {
+            if (!p.hasSubmitted) {
                 p.hasSubmitted = true;
-                p.reactionTime = p.reactionTime || Math.max(1000, Math.round(performance.now() - this.showStartTime));
-                p.rank = this.submitOrder.length + 1;
-                this.submitOrder.push(s);
+                p.reactionTime = p.reactionTime || Math.max(2000, Math.round(performance.now() - this.showStartTime));
+                if (!this.submitOrder.includes(s)) {
+                    this.submitOrder.push(s);
+                }
             }
         });
 
-        const results = this.submitOrder.map((seatIdx, rankIdx) => {
+        // 1. Separate Caller and others
+        const callerSeat = this.showTriggeredBySeat;
+        const otherSeats = this.submitOrder.filter(s => s !== callerSeat);
+
+        // 2. Sort other seats by actual reaction time (fastest reaction first)
+        otherSeats.sort((a, b) => {
+            const rtA = (this.players[a]?.reactionTime !== undefined) ? this.players[a].reactionTime : 99999;
+            const rtB = (this.players[b]?.reactionTime !== undefined) ? this.players[b].reactionTime : 99999;
+            return rtA - rtB;
+        });
+
+        // 3. Final ranked list: [callerSeat, ...sortedOthers]
+        const finalOrder = (callerSeat !== null && callerSeat !== undefined) ? [callerSeat, ...otherSeats] : otherSeats;
+
+        const results = finalOrder.map((seatIdx, rankIdx) => {
             const player = this.players[seatIdx] || { name: `Player ${rankIdx+1}`, avatar: '👤', score: 0, hand: [] };
             const pts = pointValues[rankIdx] !== undefined ? pointValues[rankIdx] : 0;
             player.roundScore = pts;
@@ -1490,9 +1517,9 @@ class ShowGame {
                 rank: rankIdx + 1,
                 points: pts,
                 totalScore: player.score,
-                reactionTime: player.reactionTime || 0,
+                reactionTime: (seatIdx === callerSeat) ? 0 : (player.reactionTime || 0),
                 hand: player.hand ? [...player.hand] : [],
-                isCaller: (seatIdx === this.showTriggeredBySeat)
+                isCaller: (seatIdx === callerSeat)
             };
         });
 

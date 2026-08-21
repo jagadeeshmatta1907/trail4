@@ -259,6 +259,7 @@ class NetworkEngine {
                     this.emit('client_submit_show', {
                         peerId: msg.peerId,
                         seatIndex: msg.seatIndex,
+                        reactionTime: msg.reactionTime,
                         timestamp: msg.timestamp || performance.now()
                     });
                     break;
