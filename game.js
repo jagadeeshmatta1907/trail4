@@ -1049,14 +1049,38 @@ class ShowGame {
         this.renderPlayerHand();
         this.updateTurnUI();
 
-        // Check if receiver completed 4 of a kind
-        if (this.isSetComplete(receiver.hand)) {
+        // Check if receiver has 4 matching cards:
+        const receiverCounts = {};
+        receiver.hand.forEach(c => {
+            if (c && c.name) receiverCounts[c.name] = (receiverCounts[c.name] || 0) + 1;
+        });
+        const matchingCardName = Object.keys(receiverCounts).find(k => receiverCounts[k] >= 4);
+
+        if (matchingCardName) {
             if (receiver.isAI) {
+                // The bot has 4 matching cards + 1 non-matching card.
+                // The bot MUST pass the 1 non-matching card to the next player first, then call SHOW!
                 const delay = 1200 + Math.random() * 800;
                 setTimeout(() => {
-                    if (!this.showTriggered) {
-                        this.handleShowDeclaration(nextSeat);
+                    if (this.showTriggered || this.gameState !== 'PASSING') return;
+
+                    const nonMatchingIdx = receiver.hand.findIndex(c => c && c.name !== matchingCardName);
+                    const cardToPass = (nonMatchingIdx !== -1) ? receiver.hand[nonMatchingIdx] : receiver.hand[0];
+
+                    const removeIdx = receiver.hand.findIndex(c => c && c.uid === cardToPass.uid);
+                    if (removeIdx !== -1) {
+                        receiver.hand.splice(removeIdx, 1);
                     }
+
+                    // 1. Pass the non-matching card to the next player
+                    this.executeNextTurnPass(nextSeat, cardToPass);
+
+                    // 2. Now holding exactly 4 matching cards, bot declares SHOW!
+                    setTimeout(() => {
+                        if (!this.showTriggered) {
+                            this.handleShowDeclaration(nextSeat);
+                        }
+                    }, 400);
                 }, delay);
                 return;
             } else if (nextSeat === this.mySeatIndex) {
@@ -1251,7 +1275,10 @@ class ShowGame {
 
         const submitBtn = document.getElementById('btn-game-submit');
         if (submitBtn) {
-            if (maxCount >= 4 && !this.showTriggered) {
+            // YOU CAN ONLY SUBMIT IF YOU HOLD EXACTLY 4 MATCHING CARDS!
+            // If you hold 5 cards, you MUST pass 1 card to the next player first.
+            const hasExact4Matching = (myPlayer.hand.length === 4 && maxCount === 4);
+            if (hasExact4Matching && !this.showTriggered) {
                 submitBtn.classList.add('ready-pulse');
                 submitBtn.disabled = false;
                 submitBtn.innerHTML = '🌟 4/4 MATCHED! PRESS SUBMIT! 🌟';
@@ -1259,7 +1286,11 @@ class ShowGame {
             } else {
                 submitBtn.classList.remove('ready-pulse');
                 submitBtn.disabled = true;
-                submitBtn.innerHTML = 'SUBMIT (Matches 4/4)';
+                if (maxCount >= 4 && myPlayer.hand.length > 4) {
+                    submitBtn.innerHTML = '👉 Pass 1 Card First (4 cards needed to submit)';
+                } else {
+                    submitBtn.innerHTML = 'SUBMIT (Matches 4/4)';
+                }
             }
         }
     }
@@ -1282,12 +1313,17 @@ class ShowGame {
         const myPlayer = this.players[this.mySeatIndex];
         if (myPlayer.hasSubmitted) return;
 
-        window.soundEngine.playBuzzer();
+        if (myPlayer.hand.length !== 4) {
+            this.showToast("You must pass 1 card first to hold exactly 4 cards!");
+            return;
+        }
 
         if (!this.isSetComplete(myPlayer.hand)) {
             this.showToast("You need 4 matching cards to call SHOW!");
             return;
         }
+
+        window.soundEngine.playBuzzer();
 
         if (this.isHost) {
             this.handleShowDeclaration(this.mySeatIndex);
@@ -1665,12 +1701,12 @@ class ShowGame {
     }
 
     isSetComplete(hand) {
-        if (!hand || hand.length < 4) return false;
+        if (!hand || hand.length !== 4) return false;
         const counts = {};
         hand.forEach(c => {
             if (c && c.name) counts[c.name] = (counts[c.name] || 0) + 1;
         });
-        return Object.values(counts).some(cnt => cnt >= 4);
+        return Object.values(counts).some(cnt => cnt === 4);
     }
 
     clearAITimers() {
