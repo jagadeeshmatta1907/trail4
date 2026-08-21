@@ -503,7 +503,7 @@ class ShowGame {
             if (!this.isHost) return;
 
             let assignedSeat = -1;
-            // Check if player already exists (reconnect)
+            // 1. Check if player already exists (reconnect)
             for (let i = 1; i < this.players.length; i++) {
                 if (this.players[i].peerId === data.peerId) {
                     assignedSeat = i;
@@ -511,7 +511,7 @@ class ShowGame {
                 }
             }
 
-            // Otherwise assign first AI slot
+            // 2. Otherwise assign first available AI slot
             if (assignedSeat === -1) {
                 for (let i = 1; i < this.players.length; i++) {
                     if (this.players[i].isAI) {
@@ -521,7 +521,25 @@ class ShowGame {
                 }
             }
 
-            if (assignedSeat !== -1) {
+            // 3. If room is full but under 8 players, dynamically expand room capacity
+            if (assignedSeat === -1 && this.players.length < 8) {
+                assignedSeat = this.players.length;
+                this.players.push({
+                    id: data.peerId,
+                    seat: assignedSeat,
+                    name: data.playerData.name,
+                    avatar: data.playerData.avatar,
+                    isAI: false,
+                    peerId: data.peerId,
+                    hand: [],
+                    score: 0,
+                    roundScore: 0,
+                    hasSubmitted: false,
+                    reactionTime: null,
+                    rank: null
+                });
+                this.settings.playerCount = this.players.length;
+            } else if (assignedSeat !== -1) {
                 this.players[assignedSeat] = {
                     id: data.peerId,
                     seat: assignedSeat,
@@ -536,23 +554,17 @@ class ShowGame {
                     reactionTime: null,
                     rank: null
                 };
+            }
 
-                // Confirm seat to the joining player
-                window.networkEngine.sendToClient(data.peerId, {
-                    type: 'SEAT_ASSIGNED',
-                    yourSeat: assignedSeat
-                });
-
+            if (assignedSeat !== -1) {
                 this.broadcastLobbyUpdate();
                 this.updateLobbyUI();
                 this.showToast(`${data.playerData.name} joined the room!`);
             } else {
-                // Room is full — send rejection back to the player who tried to join
                 window.networkEngine.sendToClient(data.peerId, {
                     type: 'ROOM_FULL',
-                    message: 'Room is full! All player slots are taken.'
+                    message: 'Room is full (max 8 players).'
                 });
-                this.showToast(`Room is full — ${data.playerData?.name || 'Someone'} could not join.`);
             }
         });
 
@@ -583,15 +595,13 @@ class ShowGame {
         });
 
         net.on('host_room_full', (msg) => {
-            // Host rejected us — room is full
             this.setScreen('joinRoom');
             const joinBtn = document.getElementById('btn-confirm-join-room');
             if (joinBtn) { joinBtn.disabled = false; joinBtn.innerText = 'Join Lobby →'; }
-            alert('❌ Room is full! All player slots are taken. Please try a different room code.');
+            alert('❌ Room is full! Maximum 8 players reached.');
         });
 
         net.on('host_seat_assigned', (msg) => {
-            // Store our seat index when host confirms our seat
             if (msg.yourSeat !== undefined) {
                 this.mySeatIndex = msg.yourSeat;
             }
@@ -629,10 +639,39 @@ class ShowGame {
             window.soundEngine.playCardDeal();
         });
 
+        net.on('host_pass_event', (msg) => {
+            this.currentTurnSeat = msg.nextSeat;
+            this.passesThisRound = msg.passesThisRound;
+
+            // Animate center face-down card pass for everyone
+            this.animateCenterPass();
+
+            if (msg.nextSeat === this.mySeatIndex) {
+                // I am the receiver! Add the passed card to my hand
+                const me = this.players[this.mySeatIndex];
+                if (me && msg.card) {
+                    const exists = me.hand.some(c => c && c.uid === msg.card.uid);
+                    if (!exists) {
+                        me.hand.push(msg.card);
+                    }
+                    this.incomingCard = msg.card;
+                }
+                this.selectedCardIndex = null;
+                window.soundEngine.playCardPass();
+            }
+
+            this.renderGameTable();
+            this.renderPlayerHand();
+            this.updateTurnUI();
+        });
+
         net.on('host_your_turn', (msg) => {
             const me = this.players[this.mySeatIndex];
             if (msg.receivedCard) {
-                me.hand.push(msg.receivedCard);
+                const exists = me.hand.some(c => c && c.uid === msg.receivedCard.uid);
+                if (!exists) {
+                    me.hand.push(msg.receivedCard);
+                }
                 this.incomingCard = msg.receivedCard;
             }
             this.currentTurnSeat = this.mySeatIndex;
@@ -692,7 +731,6 @@ class ShowGame {
             this.currentRound = msg.currentRound;
             this.screens.roundResult.classList.remove('active');
             document.getElementById('show-panic-overlay').classList.remove('active');
-            this.players = msg.players;
             this.currentTurnSeat = msg.firstTurnSeat;
             this.gameState = 'PASSING';
             this.showTriggered = false;
@@ -998,17 +1036,12 @@ class ShowGame {
 
         if (!this.isSinglePlayer) {
             window.networkEngine.broadcast({
-                type: 'TURN_UPDATE',
-                currentTurnSeat: nextSeat,
+                type: 'PASS_EVENT',
+                fromSeat: fromSeat,
+                nextSeat: nextSeat,
+                card: card,
                 passesThisRound: this.passesThisRound
             });
-
-            if (!receiver.isAI && receiver.peerId) {
-                window.networkEngine.sendToClient(receiver.peerId, {
-                    type: 'YOUR_TURN',
-                    receivedCard: card
-                });
-            }
         }
 
         this.renderGameTable();
@@ -1558,10 +1591,6 @@ class ShowGame {
                     window.networkEngine.broadcast({
                         type: 'NEXT_ROUND',
                         currentRound: this.currentRound,
-                        players: this.players.map(p => ({
-                            id: p.id, seat: p.seat, name: p.name, avatar: p.avatar, isAI: p.isAI,
-                            score: p.score, roundScore: 0, hasSubmitted: false, reactionTime: null, rank: null
-                        })),
                         firstTurnSeat: this.currentTurnSeat
                     });
                 }
