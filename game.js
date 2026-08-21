@@ -239,7 +239,19 @@ class ShowGame {
             }
         });
 
-        document.getElementById('btn-lobby-start-game')?.addEventListener('click', () => this.startMatchFromLobby());
+        const lobbyStartBtn = document.getElementById('btn-lobby-start-game');
+        if (lobbyStartBtn) {
+            const doStart = (e) => { if (e) e.preventDefault(); this.startMatchFromLobby(); };
+            lobbyStartBtn.addEventListener('click', doStart);
+            lobbyStartBtn.addEventListener('touchstart', doStart, { passive: false });
+        }
+
+        const passCardBtn = document.getElementById('btn-pass-card');
+        if (passCardBtn) {
+            const doPass = (e) => { if (e) e.preventDefault(); this.handleHumanPassCard(); };
+            passCardBtn.addEventListener('click', doPass);
+            passCardBtn.addEventListener('touchstart', doPass, { passive: false });
+        }
 
         const gameSubmitBtn = document.getElementById('btn-game-submit');
         if (gameSubmitBtn) {
@@ -811,6 +823,21 @@ class ShowGame {
             `;
             slotsContainer.appendChild(slot);
         });
+
+        const startBtn = document.getElementById('btn-lobby-start-game');
+        const waitNotice = document.getElementById('lobby-waiting-notice');
+
+        if (this.isHost) {
+            if (startBtn) startBtn.style.display = 'block';
+            if (waitNotice) waitNotice.style.display = 'none';
+        } else {
+            if (startBtn) startBtn.style.display = 'none';
+            if (waitNotice) {
+                waitNotice.style.display = 'block';
+                const me = this.players[this.mySeatIndex];
+                waitNotice.innerText = me ? `Connected as ${me.name}! Waiting for host to start...` : `Connected! Waiting for host to start...`;
+            }
+        }
     }
 
     startMatchFromLobby() {
@@ -1261,12 +1288,15 @@ class ShowGame {
             `;
 
             if (myTurn && !this.showTriggered) {
-                cardEl.addEventListener('click', () => {
+                const selectCard = (e) => {
+                    if (e) e.preventDefault();
                     this.selectedCardIndex = idx;
                     window.soundEngine.playCardSelect();
                     this.renderPlayerHand();
                     this.updateTurnUI();
-                });
+                };
+                cardEl.addEventListener('click', selectCard);
+                cardEl.addEventListener('touchstart', selectCard, { passive: false });
             }
 
             handContainer.appendChild(cardEl);
