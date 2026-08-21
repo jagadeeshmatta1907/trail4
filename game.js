@@ -241,9 +241,17 @@ class ShowGame {
 
         document.getElementById('btn-lobby-start-game')?.addEventListener('click', () => this.startMatchFromLobby());
 
-        document.getElementById('btn-pass-card')?.addEventListener('click', () => this.handleHumanPassCard());
-        document.getElementById('btn-game-submit')?.addEventListener('click', () => this.handleHumanSubmit());
-        document.getElementById('btn-panic-submit')?.addEventListener('click', () => this.handleHumanPanicSubmit());
+        const gameSubmitBtn = document.getElementById('btn-game-submit');
+        if (gameSubmitBtn) {
+            gameSubmitBtn.addEventListener('click', (e) => { e.preventDefault(); this.handleHumanSubmit(); });
+            gameSubmitBtn.addEventListener('touchstart', (e) => { e.preventDefault(); this.handleHumanSubmit(); }, { passive: false });
+        }
+
+        const panicSubmitBtn = document.getElementById('btn-panic-submit');
+        if (panicSubmitBtn) {
+            panicSubmitBtn.addEventListener('click', (e) => { e.preventDefault(); this.handleHumanPanicSubmit(); });
+            panicSubmitBtn.addEventListener('touchstart', (e) => { e.preventDefault(); this.handleHumanPanicSubmit(); }, { passive: false });
+        }
 
         document.getElementById('btn-next-round')?.addEventListener('click', () => this.handleNextRound());
         document.getElementById('btn-new-tournament')?.addEventListener('click', () => {
@@ -623,6 +631,12 @@ class ShowGame {
         });
 
         net.on('host_deal_cards', (msg) => {
+            this.players.forEach(p => {
+                p.hasSubmitted = false;
+                p.reactionTime = null;
+                p.rank = null;
+                p.roundScore = 0;
+            });
             this.players[this.mySeatIndex].hand = msg.yourHand;
             this.gameState = 'PASSING';
             this.currentTurnSeat = msg.firstTurnSeat;
@@ -691,7 +705,11 @@ class ShowGame {
 
         net.on('client_pass_card', (msg) => {
             if (!this.isHost) return;
-            const seat = msg.fromSeat;
+            let seat = msg.fromSeat;
+            if (msg.peerId) {
+                const found = this.players.findIndex(p => p.peerId === msg.peerId || p.id === msg.peerId);
+                if (found !== -1) seat = found;
+            }
             const card = msg.card;
             if (this.players[seat]) {
                 const removeIdx = this.players[seat].hand.findIndex(c => c && c.uid === card.uid);
@@ -708,13 +726,28 @@ class ShowGame {
 
         net.on('client_declare_show', (msg) => {
             if (!this.isHost) return;
-            this.handleShowDeclaration(msg.seatIndex);
+            let callerSeat = msg.seatIndex;
+            if (msg.peerId) {
+                const found = this.players.findIndex(p => p.peerId === msg.peerId || p.id === msg.peerId);
+                if (found !== -1) callerSeat = found;
+            }
+            if (callerSeat === undefined || callerSeat === null || !this.players[callerSeat]) {
+                callerSeat = this.players.findIndex(p => p.name === msg.callerName);
+            }
+            if (callerSeat === -1 || callerSeat === undefined) callerSeat = 1;
+
+            this.handleShowDeclaration(callerSeat);
         });
 
         net.on('client_submit_show', (msg) => {
             if (!this.isHost) return;
+            let seat = msg.seatIndex;
+            if (msg.peerId) {
+                const found = this.players.findIndex(p => p.peerId === msg.peerId || p.id === msg.peerId);
+                if (found !== -1) seat = found;
+            }
             const rt = (msg.reactionTime !== undefined) ? msg.reactionTime : msg.timestamp;
-            this.recordPlayerSubmit(msg.seatIndex !== undefined ? msg.seatIndex : msg.peerId, rt);
+            this.recordPlayerSubmit(seat, rt);
         });
 
         net.on('host_round_result', (msg) => {
@@ -732,6 +765,12 @@ class ShowGame {
             this.currentRound = msg.currentRound;
             this.screens.roundResult.classList.remove('active');
             document.getElementById('show-panic-overlay').classList.remove('active');
+            this.players.forEach(p => {
+                p.hasSubmitted = false;
+                p.reactionTime = null;
+                p.rank = null;
+                p.roundScore = 0;
+            });
             this.currentTurnSeat = msg.firstTurnSeat;
             this.gameState = 'PASSING';
             this.showTriggered = false;
@@ -1311,7 +1350,7 @@ class ShowGame {
     // ================= "SHOW" TRIGGER & REACTION PHASE =================
     handleHumanSubmit() {
         const myPlayer = this.players[this.mySeatIndex];
-        if (myPlayer.hasSubmitted) return;
+        if (!myPlayer || myPlayer.hasSubmitted) return;
 
         if (myPlayer.hand.length !== 4) {
             this.showToast("You must pass 1 card first to hold exactly 4 cards!");
@@ -1324,6 +1363,9 @@ class ShowGame {
         }
 
         window.soundEngine.playBuzzer();
+        myPlayer.hasSubmitted = true;
+        myPlayer.reactionTime = 0;
+        myPlayer.rank = 1;
 
         if (this.isHost) {
             this.handleShowDeclaration(this.mySeatIndex);
@@ -1332,22 +1374,28 @@ class ShowGame {
             this.triggerShowOverlay(this.mySeatIndex, myPlayer.name);
             window.networkEngine.sendToHost({
                 type: 'DECLARE_SHOW',
-                seatIndex: this.mySeatIndex
+                seatIndex: this.mySeatIndex,
+                peerId: window.networkEngine.myClientId,
+                callerName: myPlayer.name
             });
         }
     }
 
     handleHumanPanicSubmit() {
         const myPlayer = this.players[this.mySeatIndex];
-        if (myPlayer.hasSubmitted) return;
+        if (!myPlayer || myPlayer.hasSubmitted) return;
 
         window.soundEngine.playBuzzer();
         myPlayer.hasSubmitted = true;
         
-        const myReactionTime = Math.max(0, Math.round(performance.now() - this.showStartTime));
+        const myReactionTime = Math.max(1, Math.round(performance.now() - this.showStartTime));
         myPlayer.reactionTime = myReactionTime;
 
-        this.updatePanicBtn('✓ Submitted! Waiting for others...', true);
+        clearInterval(this.reactionInterval);
+        const td = document.getElementById('panic-timer-display');
+        if (td) td.innerText = `${myReactionTime} ms`;
+
+        this.updatePanicBtn(`✓ Submitted (${myReactionTime} ms)! Waiting...`, true);
 
         if (this.isHost) {
             this.recordPlayerSubmit(this.mySeatIndex, myReactionTime);
@@ -1414,21 +1462,23 @@ class ShowGame {
         document.getElementById('panic-caller-name').innerText = `${callerName} matched 4 cards!`;
         document.getElementById('panic-timer-display').innerText = '0 ms';
 
+        const myPlayer = this.players[this.mySeatIndex] || { hasSubmitted: false };
         if (callerSeat === this.mySeatIndex) {
+            myPlayer.hasSubmitted = true;
             this.updatePanicBtn('🎉 YOU CALLED SHOW! (1st Place)', true);
         } else {
+            myPlayer.hasSubmitted = false;
             this.updatePanicBtn('🚨 TAP SUBMIT NOW! 🚨', false);
         }
 
         clearInterval(this.reactionInterval);
-        const myPlayer = this.players[this.mySeatIndex];
         this.reactionInterval = setInterval(() => {
             if (!myPlayer.hasSubmitted && callerSeat !== this.mySeatIndex) {
                 const elapsed = Math.round(performance.now() - this.showStartTime);
                 const td = document.getElementById('panic-timer-display');
                 if (td) td.innerText = `${elapsed} ms`;
             }
-        }, 30);
+        }, 25);
     }
 
     updatePanicBtn(text, submitted) {

@@ -243,31 +243,16 @@ class NetworkEngine {
         if (this.isHost) {
             switch (msg.type) {
                 case 'JOIN_REQUEST':
-                    this.emit('client_join_request', {
-                        peerId: msg.peerId,
-                        playerData: msg.playerData
-                    });
+                    this.emit('client_join_request', msg);
                     break;
                 case 'PASS_CARD':
-                    this.emit('client_pass_card', {
-                        peerId: msg.peerId,
-                        card: msg.card,
-                        fromSeat: msg.fromSeat
-                    });
+                    this.emit('client_pass_card', msg);
                     break;
                 case 'SUBMIT_SHOW':
-                    this.emit('client_submit_show', {
-                        peerId: msg.peerId,
-                        seatIndex: msg.seatIndex,
-                        reactionTime: msg.reactionTime,
-                        timestamp: msg.timestamp || performance.now()
-                    });
+                    this.emit('client_submit_show', msg);
                     break;
                 case 'DECLARE_SHOW':
-                    this.emit('client_declare_show', {
-                        peerId: msg.peerId,
-                        seatIndex: msg.seatIndex
-                    });
+                    this.emit('client_declare_show', msg);
                     break;
                 default:
                     this.emit('client_custom_msg', { sender: msg.peerId, message: msg });
